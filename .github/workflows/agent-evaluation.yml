@@ -1,0 +1,59 @@
+
+name: Agent Evaluation
+
+on:
+  push:
+    paths:
+      - 'cicd/**'
+      - 'utils/**'
+      - 'agents/**'
+      - 'requirements.txt'
+  pull_request:
+    paths:
+      - 'cicd/**'
+      - 'utils/**'
+      - 'agents/**'
+      - 'requirements.txt'
+
+jobs:
+  evaluate-agent:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-west-2
+    
+    - name: Deploy Agent TST
+      run: |
+        python cicd/deploy_agent.py --environment TST
+    
+    - name: Run evaluation
+      run: |
+        python cicd/tst.py
+    
+    - name: Check Factuality score
+      run: |
+        python cicd/check_factuality.py
+    
+    - name: Cleanup - Delete Agent
+      run: |
+        python cicd/delete_agent.py
+    
+    - name: Deploy Agent PRD
+      run: |
+        python cicd/deploy_agent.py --environment PRD

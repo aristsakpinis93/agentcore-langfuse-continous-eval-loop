@@ -1,0 +1,22 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.env
+.venv
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+.DS_Store
+
+# Generated files from your codebase
+factuality_results.json
+experimentation/hpo_config_tmp.json
+
+# Log files
+*.log
