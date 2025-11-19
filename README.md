@@ -83,46 +83,138 @@ pip install -r requirements.txt
 
 ### AWS Configuration
 
+Proper AWS configuration underpins the entire flywheel. Treat every step as security-critical and follow the principle of least privilege when granting access.
+
 #### AWS Account Setup
 
-1. **AWS Account**: Ensure you have an AWS account with Bedrock AgentCore access
-2. **AWS CLI**: Configure AWS CLI with appropriate permissions
-3. **AWS Region**: Set your preferred region (default: us-west-2)
+1. **AWS Account**: Use an account that already has Amazon Bedrock AgentCore enabled. If your org uses Control Tower/Landing Zone, request access through the standard intake process.
+2. **AWS CLI**: Install and configure the AWS CLI with appropriate permissions.
+3. **AWS Region**: Configure your preferred AWS region (default: us-west-2).
 
 #### AWS IAM Permissions
 
-The following IAM permissions are required:
+Create two scoped IAM principals: one for local experimentation and one for CI/CD. Start by reviewing the AWS-managed policy [BedrockAgentCoreFullAccess](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/security-iam-awsmanpol.html) to understand the full surface. For production use, copy only the permissions you need from the [AgentCore IAM reference](https://docs.aws.amazon.com/IAM/latest/UserGuide/list_amazonbedrockagentcore.html) so that access remains least-privilege.
 
-**Required Permissions:**
-- `bedrock-agentcore:*` - For agent deployment and management
-- `ssm:GetParameter` - For reading configuration parameters
-- `ecr:*` - For container registry operations
-- `iam:PassRole` - For agent execution role creation
+The baseline policy below covers the actions required for this repository (create/update/delete and invoke AgentCore runtimes plus gateway targets), image pushes to ECR, and reads from SSM Parameter Store. Replace the account IDs/regions with your own and, when possible, scope the `Resource` entries to specific `runtime` or `runtime-endpoint` ARNs as documented in the service authorization reference.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AgentCoreControlPlane",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateAgentRuntime",
+        "bedrock-agentcore:UpdateAgentRuntime",
+        "bedrock-agentcore:DeleteAgentRuntime",
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:ListAgentRuntimes",
+        "bedrock-agentcore:CreateAgentRuntimeEndpoint",
+        "bedrock-agentcore:UpdateAgentRuntimeEndpoint",
+        "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
+        "bedrock-agentcore:GetAgentRuntimeEndpoint",
+        "bedrock-agentcore:InvokeAgentRuntime",
+        "bedrock-agentcore:InvokeAgentRuntimeForUser"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AgentCorePassRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::*:role/AmazonBedrockAgentCore*"
+    },
+    {
+      "Sid": "ECRImageMgmt",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:CompleteLayerUpload",
+        "ecr:CreateRepository",
+        "ecr:DeleteRepository",
+        "ecr:GetAuthorizationToken",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:InitiateLayerUpload",
+        "ecr:ListImages",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SSMReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParameterHistory",
+        "ssm:DescribeParameters"
+      ],
+      "Resource": "arn:aws:ssm:us-west-2:123456789012:parameter/langfuse/*"
+    }
+  ]
+}
+```
+
+##### IAM user for Experimentation & HPO (local manual execution)
+
+- Attach the baseline policy above.
+- Provide programmatic access keys so that `experimentation/hpo.py` and `utils/agent.py` can authenticate.
+- Rotate these keys when handing over to another engineer or finishing a major experiment wave.
+
+##### IAM user/role for QA & Testing (GitHub Actions CI/CD)
+
+- Attach the same baseline policy plus `AmazonSSMReadOnlyAccess` if your security team prefers AWS-managed policies.
+- Store the generated access key/secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` GitHub repository secrets.
+
+##### Amazon Bedrock API key
+
+Bedrock AgentCore leverages your account permissions, but remote evaluations from Langfuse Cloud call the Bedrock ChatCompletions API directly. Follow the [Bedrock API key guide](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html) and store the resulting key in Langfuse (see Langfuse Configuration below).
 
 #### AWS Systems Manager Parameters
 
-Set up configuration parameters in AWS Systems Manager Parameter Store:
+Use SSM Parameter Store to centralize sensitive Langfuse credentials so that both local scripts and CI/CD workloads can fetch them securely. The following foundation keeps secrets in one place and auditable:
 
 ```bash
-# Set up required parameters in SSM Parameter Store
 aws ssm put-parameter --name "/langfuse/LANGFUSE_PROJECT_NAME" --value "your-project-name" --type "String"
 aws ssm put-parameter --name "/langfuse/LANGFUSE_SECRET_KEY" --value "your-secret-key" --type "SecureString"
 aws ssm put-parameter --name "/langfuse/LANGFUSE_PUBLIC_KEY" --value "your-public-key" --type "String"
 aws ssm put-parameter --name "/langfuse/LANGFUSE_HOST" --value "https://us.cloud.langfuse.com" --type "String"
 ```
 
+- `LANGFUSE_PROJECT_NAME`: must match the value shown in your Langfuse project settings (case sensitive).
+- `LANGFUSE_SECRET_KEY`: used only by trusted backends (CI/CD, AgentCore lambdas); always store it as `SecureString`.
+- `LANGFUSE_PUBLIC_KEY`: consumed by SDKs that merely need authenticated ingestion calls.
+- `LANGFUSE_HOST`: choose the Langfuse region that holds your project.
+
+`utils/aws.py` fetches these parameters at runtime, so no additional configuration files are needed.
 
 ### Langfuse Configuration
 
+Langfuse acts as the system of record for evaluations, datasets, and annotation queues. Make sure the configuration below matches what you stored in Parameter Store.
+
 #### Langfuse Account Setup
 
-1. **Create Account**: Sign up at https://langfuse.com
-2. **Create Project**: Set up a new project in your Langfuse dashboard
-3. **Get API Keys**: Retrieve your public key, secret key, and project name from the [project settings](https://langfuse.com/faq/all/where-are-langfuse-api-keys)
+1. **Create Account**: Sign up at https://langfuse.com (cloud) or deploy Langfuse OSS if you need self-hosting.
+2. **Create Project**: From the dashboard, create a project dedicated to this flywheel.
+3. **Get API Keys**: Copy the public key, secret key, and project name from the [project settings](https://langfuse.com/faq/all/where-are-langfuse-api-keys) and populate the SSM parameters described above.
 
-#### Langfuse Dataset Setup
+#### Configure the LLM connection to Amazon Bedrock
 
-Create a dataset named `strands-ai-mcp-agent-evaluation` in your Langfuse project:
+- In Langfuse, open **Settings → LLM Connections** and create a connection using the Bedrock ChatCompletions endpoint. Documentation: https://langfuse.com/docs/administration/llm-connection
+- Provide the Bedrock API key created earlier and list the model identifiers you plan to use.
+- This connection lets Langfuse remote evaluators call Bedrock directly.
+
+#### Default model for remote LLM-as-a-Judge evaluations
+
+- Navigate to **Settings → Evaluations** and set the default model for LLMaaJ to the Bedrock model that offers the right balance of intelligence, latency and cost. Detailed steps: https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge#set-the-default-model
+- You can override the default per evaluator, but setting it globally avoids accidental use of the wrong model when running evaluations.
+
+#### Langfuse dataset setup
+
+Create the golden dataset `strands-ai-mcp-agent-evaluation` (or a name of your choice). The snippet below matches what `Langfuse().create_dataset` expects:
 
 ```python
 # Example: Creating a dataset in Langfuse
@@ -169,16 +261,51 @@ The GitHub Actions workflow will automatically:
 
 ## Golden Dataset
 
-The project uses a dataset named `strands-ai-mcp-agent-evaluation` stored in Langfuse. This dataset should contain:
-- **question**: The prompt or question to send to the agent (mapped from `input`)
-- **expected_output**: The expected response for evaluation
+The repository includes a ready-to-import dataset file at `dataset.json`. Each entry contains exactly two properties:
 
-Example dataset item structure:
+- `input`: An object that mirrors the payload you send to the agent.
+- `expected_output`: The original ground-truth structure captured from production traces (trajectory hints, search terms, and reference facts). 
+
+Example entry from the file:
 ```json
 {
-  "question": "What is Langfuse and how does it help monitor LLM applications?",
-  "expected_output": "Langfuse is an observability platform for LLM applications that provides..."
+  "input": {
+    "question": "How long are traces retained in langfuse?"
+  },
+  "expected_output": {
+    "trajectory": [
+      "getLangfuseOverview",
+      "searchLangfuseDocs"
+    ],
+    "search_term": "Data retention",
+    "response_facts": [
+      "By default, traces are retained indefinetly",
+      "You can set custom data retention policy in the project settings"
+    ]
+  }
 }
+```
+
+Use the snippet below to create the `strands-ai-mcp-agent-evaluation` dataset in Langfuse and populate it directly from `dataset.json`:
+
+```python
+from pathlib import Path
+import json
+from langfuse import Langfuse
+
+langfuse = Langfuse()
+dataset = langfuse.create_dataset(
+    name="strands-ai-mcp-agent-evaluation",
+    description="Evaluation dataset for MCP agent testing"
+)
+
+items = json.loads(Path("dataset.json").read_text())
+
+for item in items:
+    dataset.create_item(
+        input=item["input"],
+        expected_output=item["expected_output"]
+    )
 ```
 
 ## Usage

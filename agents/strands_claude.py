@@ -32,6 +32,7 @@ bedrock_model = get_bedrock_model()
 
 # Define the agent's system prompt (exact from AWS sample)
 system_prompt = os.getenv("SYSTEM_PROMPT", "You are an experienced agent supporting developers.")
+env = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "DEV")
 
 app = BedrockAgentCoreApp()
 
@@ -61,9 +62,12 @@ def strands_agent_bedrock(payload):
             system_prompt=system_prompt,
             tools=mcp_tools
         )
-
-        with get_client().start_as_current_observation(name='strands-agent', trace_context={"trace_id": trace_id, "parent_observation_id": parent_obs_id}):
-
+        # Reopen span for OTEL distributed tracing in DEV and TST environments to consolidate traces from AgentCore and Langfuse experiments
+        if env == "DEV" or env == "TST":
+            with get_client().start_as_current_observation(name='strands-agent', trace_context={"trace_id": trace_id, "parent_observation_id": parent_obs_id}):
+                response = agent(user_input)
+        else:
+            
             response = agent(user_input)
 
     return response.message['content'][0]['text']
