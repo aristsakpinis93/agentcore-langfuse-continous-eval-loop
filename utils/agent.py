@@ -32,7 +32,7 @@ langfuse_project_name = LANGFUSE_PROJECT_NAME
 langfuse_secret_key = LANGFUSE_SECRET_KEY
 langfuse_public_key = LANGFUSE_PUBLIC_KEY
 langfuse_auth_token = base64.b64encode(f"{langfuse_public_key}:{langfuse_secret_key}".encode()).decode()
-otel_auth_header = f"Authorization=Basic {langfuse_auth_token}"
+otel_auth_header = f"Authorization=Basic {langfuse_auth_token},x-langfuse-ingestion-version=4"
 
 
 

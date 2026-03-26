@@ -1,4 +1,4 @@
 {
-    "models": [{"name": "claude37sonnet", "model_id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0"}],
+    "models": [{"name": "claude46sonnet", "model_id": "us.anthropic.claude-sonnet-4-6"}],
     "system_prompts": [{"name": "prompt_english", "prompt": "You are an experienced agent supporting developers using Amazon Bedrock AgentCore and LangFuse."}]
 }
