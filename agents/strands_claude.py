@@ -12,7 +12,8 @@ from strands.tools.mcp.mcp_client import MCPClient
 from langfuse import get_client
 
 
-streamable_http_mcp_client = MCPClient(lambda: streamablehttp_client("https://langfuse.com/api/mcp"))
+# MCP client URL for Langfuse docs
+LANGFUSE_MCP_URL = "https://langfuse.com/api/mcp"
 
 # Function to initialize Bedrock model
 def get_bedrock_model():
@@ -51,10 +52,12 @@ def strands_agent_bedrock(payload):
     strands_telemetry = StrandsTelemetry()
     strands_telemetry.setup_otlp_exporter()
 
-    # Create an agent with MCP tools
-    with streamable_http_mcp_client:
+    # Create a new MCP client per invocation to avoid concurrency issues
+    mcp_client = MCPClient(lambda: streamablehttp_client(LANGFUSE_MCP_URL))
 
-        mcp_tools = streamable_http_mcp_client.list_tools_sync()
+    with mcp_client:
+
+        mcp_tools = mcp_client.list_tools_sync()
 
         # Create the agent
         agent = Agent(
